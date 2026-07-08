@@ -2,18 +2,72 @@
 
 Here you can find all the orphan resources queries that build this Workbook.
 
+## Enterprise inventory metadata
+
+The workbook includes a consolidated inventory query that normalizes the resource-specific detections into common columns:
+
+- `Category`
+- `OrphanReason`
+- `CostBearing`
+- `EstimatedMonthlySavingsUSD`
+- `CostEstimateStatus`
+- `OrphanConfidence`
+- `ResourceAgeDays` where ARG exposes a reliable timestamp
+- `AzurePortalLink`
+
+`EstimatedMonthlySavingsUSD` is intentionally blank unless the workbook has a defensible source for the value. Azure Resource Graph does not expose actual billed cost, so direct-cost resources should be validated in Azure Cost Management or billing exports before savings are reported.
+
+| Resource type | Orphan condition | Direct cost candidate | Confidence |
+| --- | --- | --- | --- |
+| App Service Plans | `numberOfSites == 0` | Yes | High |
+| Availability Sets | No associated VMs and not ASR generated | No | High |
+| Proximity Placement Groups | No VMs, availability sets, or VM scale sets associated | No | High |
+| Managed Disks | Unattached/no `managedBy`; ASR, AKS PVC, and backup patterns excluded | Yes | High |
+| Snapshots | No `managedBy` relationship; review retention policy before deleting | Yes | Review Required |
+| SQL Elastic Pools | No databases in the pool | Yes | High |
+| Public IP Addresses | No IP configuration, NAT gateway, or public IP prefix association | Yes | High |
+| Public IP Prefixes | No allocated child public IP addresses | Yes | Medium |
+| Network Interfaces | No VM, private endpoint, private link service, or hosted workload association | No | High |
+| Network Security Groups | Not associated with a NIC or subnet | No | High |
+| Application Security Groups | Not associated with any network interface IP configuration | No | High |
+| Route Tables | Not associated with a subnet | No | High |
+| Service Endpoint Policies | Not associated with any subnet | No | High |
+| Load Balancers | No backend address pools and no inbound NAT rules | Yes | Medium |
+| Front Door WAF Policies | No security policy links | Review | Medium |
+| Traffic Manager Profiles | No endpoints | Review | Medium |
+| Application Gateways | Backend pools contain no backend IP configurations or addresses | Yes | Medium |
+| Virtual Networks | No subnets | No | High |
+| Subnets | No connected devices, delegation, or application gateway IP configurations | No | High |
+| NAT Gateways | Not associated with any subnet | Yes | High |
+| IP Groups | Not referenced by Azure Firewall or Firewall Policy | No | High |
+| Private DNS Zones | Zero virtual network links | Yes | Medium |
+| Private Endpoints | Private endpoint connection state is `Disconnected` | Yes | High |
+| Virtual Network Gateways | No point-to-site configuration and no gateway connections | Yes | Medium |
+| DDoS Protection Plans | No associated virtual networks | Yes | High |
+| VNet Peerings | Peering state is not `Connected` | No | Review Required |
+| Resource Groups | Contains no visible or hidden resources | No | High |
+| API Connections | Not referenced by Logic App workflow connection parameters | Review | Medium |
+| Certificates | Expired certificate | Review | High |
+
+> Cost note: direct-cost candidate means the resource type can commonly create standalone Azure charges. It is not an assertion that the currently selected resource has a specific billed amount.
+
 - [Compute](#compute)
   - [App Service Plans](#app-service-plans)
   - [Availability Set](#availability-set)
+  - [Proximity Placement Groups](#proximity-placement-groups)
 - [Storage](#storage)
   - [Managed Disks](#managed-disks)
+  - [Snapshots](#snapshots)
 - [Database](#database)
   - [SQL elastic pool](#sql-elastic-pool)
 - [Networking](#networking)
   - [Public IPs](#public-ips)
+  - [Public IP Prefixes](#public-ip-prefixes)
   - [Network Interfaces](#network-interfaces)
   - [Network Security Groups](#network-security-groups)
+  - [Application Security Groups](#application-security-groups)
   - [Route Tables](#route-tables)
+  - [Service Endpoint Policies](#service-endpoint-policies)
   - [Load Balancers](#load-balancers)
   - [Front Door WAF Policy](#front-door-waf-policy)
   - [Traffic Manager Profiles](#traffic-manager-profiles)
@@ -26,6 +80,7 @@ Here you can find all the orphan resources queries that build this Workbook.
   - [Private Endpoints](#private-endpoints)
   - [Virtual Network Gateways](#virtual-network-gateways)
 - - [DDoS Protection](#ddos-protections)
+  - [VNet Peerings](#vnet-peerings)
 - [Others](#others)
   - [Resource Groups](#resource-groups)
   - [API Connections](#api-connections)
@@ -62,6 +117,20 @@ Resources
 
 > <sub> 1) Enable replication process for VM with Availability Set created additional Availability Set that end with the suffix *"-asr"*.<br/>
 
+#### Proximity Placement Groups
+
+[Proximity Placement Groups](https://learn.microsoft.com/en-us/azure/virtual-machines/co-location) that do not have VMs, Availability Sets, or VM Scale Sets associated.
+
+```kql
+resources
+| where type =~ "microsoft.compute/proximityplacementgroups"
+| where (isnull(properties.virtualMachines) or array_length(properties.virtualMachines) == 0)
+    and (isnull(properties.availabilitySets) or array_length(properties.availabilitySets) == 0)
+    and (isnull(properties.virtualMachineScaleSets) or array_length(properties.virtualMachineScaleSets) == 0)
+| extend Details = pack_all()
+| project subscriptionId, Resource=id, resourceGroup, location, tags, Details
+```
+
 ## Storage
 
 #### Managed Disks
@@ -86,6 +155,20 @@ Resources
         3) When replicated on-premises VMware VMs and physicall servers to managed disks in Azure, these logs are used to create recovery points on Azure-managed disks that have prefix of *"asrseeddisk-"*.</sub>
 
 > **_Note:_** AKS Persistent Volume Claim (aka: PVC) managed disks are excluded from the orphaned resource query.
+
+#### Snapshots
+
+[Managed disk snapshots](https://learn.microsoft.com/en-us/azure/virtual-machines/snapshot-copy-managed-disk) with no `managedBy` relationship.
+
+```kql
+resources
+| where type =~ "microsoft.compute/snapshots"
+| where isempty(managedBy)
+| extend Details = pack_all()
+| project subscriptionId, Resource=id, resourceGroup, location, SnapshotType=sku.name, diskSizeGB=properties.diskSizeGB, timeCreated=properties.timeCreated, tags, Details
+```
+
+> **_Caution:_** Snapshots can be intentionally retained for backup, recovery, compliance, or deployment rollback. Treat this as a review candidate, not an automatic deletion signal.
 
 ## Database
 
@@ -118,6 +201,18 @@ Resources
 | where properties.ipConfiguration == "" and properties.natGateway == "" and properties.publicIPPrefix == ""
 | extend Details = pack_all()
 | project subscriptionId, Resource=id, resourceGroup, location, Type=tostring(sku.name), AllocationMethod=tostring(properties.publicIPAllocationMethod), tags, Details
+```
+
+#### Public IP Prefixes
+
+[Public IP Prefixes](https://learn.microsoft.com/en-us/azure/virtual-network/ip-services/public-ip-address-prefix) without allocated child Public IP Addresses.
+
+```kql
+resources
+| where type =~ "microsoft.network/publicipprefixes"
+| where isnull(properties.publicIPAddresses) or array_length(properties.publicIPAddresses) == 0
+| extend Details = pack_all()
+| project subscriptionId, Resource=id, resourceGroup, location, Sku=sku.name, PrefixLength=properties.prefixLength, tags, Details
 ```
 
 #### Network Interfaces
@@ -155,6 +250,18 @@ Resources
 | project subscriptionId, Resource=id, resourceGroup, location, tags, Details
 ```
 
+#### Application Security Groups
+
+[Application Security Groups](https://learn.microsoft.com/en-us/azure/virtual-network/application-security-groups) that are not associated with any network interface IP configuration.
+
+```kql
+resources
+| where type =~ "microsoft.network/applicationsecuritygroups"
+| where isnull(properties.networkInterfaces) or array_length(properties.networkInterfaces) == 0
+| extend Details = pack_all()
+| project subscriptionId, Resource=id, resourceGroup, location, tags, Details
+```
+
 #### Route Tables
 
 [Route Tables](https://learn.microsoft.com/en-us/azure/virtual-network/virtual-networks-udr-overview) that not attached to any subnet.
@@ -163,6 +270,18 @@ Resources
 resources
 | where type == "microsoft.network/routetables"
 | where isnull(properties.subnets)
+| extend Details = pack_all()
+| project subscriptionId, Resource=id, resourceGroup, location, tags, Details
+```
+
+#### Service Endpoint Policies
+
+[Service Endpoint Policies](https://learn.microsoft.com/en-us/azure/virtual-network/virtual-network-service-endpoint-policies-overview) that are not attached to any subnet.
+
+```kql
+resources
+| where type =~ "microsoft.network/serviceendpointpolicies"
+| where isnull(properties.subnets) or array_length(properties.subnets) == 0
 | extend Details = pack_all()
 | project subscriptionId, Resource=id, resourceGroup, location, tags, Details
 ```
@@ -352,6 +471,22 @@ resources
 | extend Details = pack_all()
 | project subscriptionId, Resource=id, resourceGroup, location, tags, Details
 ```
+
+#### VNet Peerings
+
+[Virtual network peerings](https://learn.microsoft.com/en-us/azure/virtual-network/virtual-network-peering-overview) that are not in `Connected` state.
+
+```kql
+resources
+| where type =~ "microsoft.network/virtualnetworks"
+| mv-expand peering=properties.virtualNetworkPeerings
+| extend peeringState=tostring(peering.properties.peeringState)
+| where peeringState !~ "Connected"
+| extend Resource=tostring(peering.id), PeeringName=tostring(peering.name), RemoteVirtualNetwork=tostring(peering.properties.remoteVirtualNetwork.id), Details=pack_all()
+| project subscriptionId, Resource, resourceGroup, location, PeeringName, peeringState, RemoteVirtualNetwork, Details
+```
+
+> **_Caution:_** A peering in `Initiated` or another non-connected state may be mid-deployment or waiting for the remote side to be configured. Treat this as review-required.
 
 ## Others
 

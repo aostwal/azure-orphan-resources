@@ -7,6 +7,16 @@ The purpose of this workbook is to provide an overview of your orphaned resource
 - Prevent misconfiguration
 - Simplify operations
 
+## Enterprise workbook enhancements
+
+The workbook now includes additional governance and FinOps views while preserving the original resource-specific tabs and delete workflow:
+
+- Executive summary KPIs for total orphan candidates, direct-cost candidates, affected subscriptions, and affected resource groups.
+- Consolidated Inventory tab with subscription, resource group, resource type, category, orphan reason, cost-bearing classification, confidence, tags, Azure Portal link, and resource ID.
+- Cost Savings tab that prioritizes resources that commonly carry direct Azure charges.
+- Conservative confidence labels: High, Medium, or Review.
+- Cost-estimation guardrails. Azure Resource Graph does not contain actual billed cost, so dollar savings are left blank unless a defensible source is available. Validate savings in Azure Cost Management before reporting realized savings.
+
 ![image](https://github.com/user-attachments/assets/c86a1bf5-bc4b-4475-ab09-59b164f5eecb)
 
 ![image](https://github.com/user-attachments/assets/76ce2f92-91ff-4afc-b5c0-2246e5567a1f)
@@ -29,15 +39,20 @@ The workbook includes the following kinds of resources:
 - Compute
   - App Service Plans 💲
   - Availability Set
+  - Proximity Placement Groups
 - Storage
   - Managed Disks 💲
+  - Snapshots 💲
 - Database
   - SQL Elastic Pools 💲
 - Networking
   - Public IPs 💲
+  - Public IP Prefixes 💲
   - Network Interfaces
   - Network Security Groups
+  - Application Security Groups
   - Route Tables
+  - Service Endpoint Policies
   - Load Balancers 💲
   - Front Door WAF Policy
   - Traffic Manager Profiles
@@ -50,10 +65,19 @@ The workbook includes the following kinds of resources:
   - Private Endpoints 💲
   - Virtual Network Gateways 💲
   - DDoS Protections 💲
+  - VNet Peerings
 - Others
   - Resource Groups
   - API Connections
   - Certificates
+
+## Detection quality and FinOps guidance
+
+The workbook is intentionally conservative. A resource appears as an orphan candidate only when its detached, empty, expired, or disconnected state is visible in Azure Resource Graph. Some resources are marked as direct-cost candidates because the resource type commonly has standalone charges, but the workbook does not fabricate prices from SKU names alone.
+
+Use the Cost Savings tab to prioritize cleanup review, then confirm actual monthly and annual savings in Azure Cost Management or your billing export. Governance-only resources such as NICs, NSGs, ASGs, route tables, service endpoint policies, VNet peerings, empty subnets, empty VNets, proximity placement groups, and empty resource groups are useful cleanup candidates but are not assigned fake savings.
+
+Snapshots and non-connected VNet peerings are intentionally marked for review. Snapshots often exist for retention or recovery reasons, and VNet peerings can be temporarily non-connected while the remote side is still being configured.
 
 ## Resource Deletion
 
